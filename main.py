@@ -101,10 +101,11 @@ class DQNAgent:
         model = Sequential()
         model.add(InputLayer(input_shape=(self.userNumber, 3)))
         model.add(Flatten())
-        model.add(Dense(128, activation='relu'))
-        model.add(Dense(128, activation='relu'))
-        model.add(Dense(self.action_size, activation='linear'))
+        model.add(Dense(128, activation='relu', name="dense1"))
+        model.add(Dense(128, activation='relu', name="dense2"))
+        model.add(Dense(self.action_size, activation='linear', name="dense3"))
         model.compile(loss='mse', optimizer=Adam(lr=self.learning_rate))
+        model.summary()
         return model
 
     def _build_Con_model(self):
@@ -139,7 +140,7 @@ class DQNAgent:
             target_f = self.model.predict(state)[0]
             target_f[action] = target
             # self.model.train_on_batch(state, target_f)
-            self.model.fit(state, target_f, epochs=1, verbose=0)
+            self.model.fit(state, target_f[np.newaxis, ...], epochs=1, verbose=0)
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
