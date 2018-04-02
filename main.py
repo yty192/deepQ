@@ -26,15 +26,22 @@ class Environment:
         self.T_f = 600   # time of one frame in symbols
         self.dr = self.alpha * self.T_f * self.Ts   # delay time limitation in us
         self.L = 2640   # required calculation cycle per bit
-        self.SNR_average = 10**(1.5)
+        self.SNR_average = 10**(2)
         self.rho = 0.7
-        self.punishment_done = -1000
-        self.punishment_delay = -1000
+        self.punishment_delay = -userNumber
         self.channelModel = channelModel
+        self.featureNumber = 4
         if userNumber == 2:
             self.action_size = totalCPU + 1
         if userNumber == 3:
             self.action_size = int(((totalCPU + 1) * (totalCPU + 2)) / 2)
+        self.newTaskProbability = 0.99
+        self.requiredErrorProbability = 10**(-3)
+        self.taskSizeSpace = [500, 1000, 1500, 2000]
+        self.taskCount = 0
+        self.successTaskCount_best = 0
+        self.successTaskCount_equal = 0
+        self.delayTaskCount_best = 0
 
     def reset(self):
         self.userBuffer = []
@@ -42,18 +49,24 @@ class Environment:
             self.userBuffer.append([])
         self.channel_h = [0 for i in range(self.userNumber)]
         self.SNR = np.zeros(self.userNumber)
+        self.taskCount = 0
+        self.successTaskCount_best = 0
+        self.successTaskCount_equal = 0
+        self.delayTaskCount_best = 0
 
     def updateBuffer(self):
         z = [0.170279632305101, 0.903701776799380, 2.251086629866130, 4.266700170287658, 7.045905402393464,
              10.758516010180998, 15.740678641278004, 22.863131736889265]
         w = [0.369188589341638, 0.418786780814343, 0.175794986637172, 0.033343492261216, 0.002794536235226,
              9.076508773358205e-05, 8.485746716272531e-07, 1.048001174871507e-09]
-        taskSizeSpace = [1000,1500,2000]
+
         for i in range(self.userNumber):
             for j in range(len(self.userBuffer[i])):
                 self.userBuffer[i][j]['waitTime'] += 1
-            newTask = {'taskSize': np.random.choice(taskSizeSpace), 'waitTime': 0}
-            self.userBuffer[i].append(newTask)
+            if np.random.rand() <= self.newTaskProbability:
+                newTask = {'taskSize': np.random.choice(self.taskSizeSpace), 'waitTime': 0}
+                self.userBuffer[i].append(newTask)
+                self.taskCount += 1
             if self.channelModel == 1:
                 self.SNR[i] = np.random.choice(z, p=w)
         if self.channelModel == 2:
@@ -65,21 +78,28 @@ class Environment:
             if not self.SNR[i]:
                 self.channel_h[i] = h_bar
             else:
-                self.channel_h[i] = self.rho*self.channel_h[i]+(1-self.rho)*h_bar
+                self.channel_h[i] = self.rho*self.channel_h[i]+np.sqrt(1-self.rho**2)*h_bar
             self.SNR[i] = abs(self.channel_h[i])**2
 
     def getState(self):
-        State = np.zeros((self.userNumber, 3))
+        State = np.zeros((self.userNumber, self.featureNumber))
         for i in range(self.userNumber):
-            State[i,0] = self.userBuffer[i][0]['taskSize']
-            State[i,1] = self.userBuffer[i][0]['waitTime']
-            State[i,2] = self.SNR[i]
+            if not self.userBuffer[i]:
+                State[i, 0] = 0
+                State[i, 1] = 0
+                State[i, 2] = 0
+            else:
+                State[i, 0] = self.userBuffer[i][0]['taskSize']
+                State[i, 1] = self.userBuffer[i][0]['waitTime']
+                State[i, 2] = len(self.userBuffer[i])
+            State[i, 3] = self.SNR[i]
         return State
 
     def takeAction(self, action):
+        successCount = 0
         reward = 0
         for i in range(self.userNumber):
-            if action[i] == 0:
+            if (action[i] == 0) or (not self.userBuffer[i]):
                 continue
             else:
                 Dm = self.userBuffer[i][0]['taskSize']
@@ -87,42 +107,73 @@ class Environment:
                 mc = int(np.ceil(Dm * self.L / (cpu * self.f0 * self.Ts)))
                 m_MT = self.T_f - self.m_UM - mc
                 if m_MT <= 0:
-                    reward = reward + self.punishment_delay  # punishment for long delay of calculation
+                    reward = reward - 5  # punishment for long delay of calculation
                     continue
                 else:
-                    # Qfunction = lambda x: 0.5 - 0.5 * scipy.special.erf(x / np.sqrt(2))
+                    Qfunction = lambda x: 0.5 - 0.5 * scipy.special.erf(x / np.sqrt(2))
                     gamma = self.SNR[i] * self.SNR_average
                     QfunctionInput = (np.log2(1 + gamma) - (self.beta * Dm / m_MT)) / (
                                 np.log2(np.e) * np.sqrt((1 - (1 + gamma) ** (-2)) / m_MT))
-                    reward = reward + QfunctionInput
-        return reward
+                    decodeError = Qfunction(QfunctionInput)
+                    if decodeError < self.requiredErrorProbability:
+                        successCount += 1
+                        reward = reward + 1
+                    else:
+                        reward = reward - 1
+        return reward, successCount
+
+    def action_equal(self):
+        actionAarry = [int(np.floor(self.totalCPU / self.userNumber)) for i in range(self.userNumber)]
+        actionAarry[np.argmin(self.SNR)] += (totalCPU - np.sum(actionAarry))
+        return actionAarry
 
     def step_bestAllocate(self):
         reward_best = -10000
+        success_best = 0
         action_best = actionTransfer(self.userNumber,self.totalCPU,0)
         for i in range(self.action_size):
             action_temp = actionTransfer(self.userNumber,self.totalCPU,i)
-            reward_temp = self.takeAction(action_temp)
+            reward_temp, success_temp = self.takeAction(action_temp)
             if reward_temp > reward_best:
                 reward_best = reward_temp
                 action_best = action_temp
+                success_best = success_temp
+        self.successTaskCount_best += success_best
+
+        # for i in range(self.userNumber):
+        #     if not self.userBuffer[i]:
+        #         break
+        #     if self.userBuffer[i][0]['waitTime'] == (self.alpha - 1):
+        #         action_best = action_AllForOne(self.userNumber,self.totalCPU,i)
+        #         reward_best = self.takeAction(action_best)
+        #         break
 
         for i in range(self.userNumber):
-            if self.userBuffer[i][0]['waitTime'] == (self.alpha - 1):
-                action_best = action_AllForOne(self.userNumber,self.totalCPU,i)
-                reward_best = self.takeAction(action_best)
-                break
-
-        for i in range(self.userNumber):
-            if action_best[i] != 0:
+            if (action_best[i] != 0) and (self.userBuffer[i]):
                 self.userBuffer[i].pop(0)
         self.updateBuffer()
+        done, count = self.checkDelayViolation()
+        if done:
+            self.delayTaskCount_best += count
+            reward_best = self.punishment_delay
         return reward_best, action_best
 
     def equalAllocate(self):
-        action = action_equal(self.userNumber, self.totalCPU)
-        reward = self.takeAction(action)
+        action = self.action_equal()
+        reward, count = self.takeAction(action)
+        self.successTaskCount_equal += count
         return reward, action
+
+    def checkDelayViolation(self):
+        done = False
+        count = 0
+        for i in range(self.userNumber):
+            if self.userBuffer[i]:
+                if self.userBuffer[i][0]['waitTime'] == self.alpha:
+                    self.userBuffer[i].pop(0)
+                    count += 1
+                    done = True
+        return done, count
 
     def step_network(self, action):
         reward = 0
@@ -153,7 +204,6 @@ class Environment:
                     #     reward = reward + np.log10(1 / decodeError)
         self.updateBuffer()
         newState = self.getState()
-        #   reward = reward / self.userNumber
         for i in range(self.userNumber):
             if self.userBuffer[i][0]['waitTime'] == self.alpha:
                 reward = self.punishment_done  # punishment for long waiting time
@@ -162,7 +212,8 @@ class Environment:
 
 class DQNAgent:
     def __init__(self, userNumber, totalCPU, W, networkModel):
-        self.state_size = 3 * userNumber * W
+        self.featureNumber = 4
+        self.state_size = self.featureNumber * userNumber * W
         self.userNumber = userNumber
         if userNumber == 2:
             self.action_size = totalCPU + 1
@@ -182,7 +233,7 @@ class DQNAgent:
     def _build_FNN_model(self):
         # FNN Neural Net for Deep-Q learning Model
         model = Sequential()
-        model.add(InputLayer(input_shape=(self.userNumber, 3, W)))
+        model.add(InputLayer(input_shape=(self.userNumber, self.featureNumber, W)))
         model.add(Flatten())
         model.add(Dense(128, activation='relu'))
         model.add(Dense(128, activation='relu'))
@@ -194,7 +245,7 @@ class DQNAgent:
     def _build_Con_model(self):
         # 1D Convolutional Neural Net for Deep-Q learning Model
         model = Sequential()
-        model.add(Conv2D(20, (2, 2), input_shape=(self.userNumber, 3, W)))
+        model.add(Conv2D(20, (2, 2), input_shape=(self.userNumber, self.featureNumber, W)))
         # model.add(Conv2D(40, (2, 2)))
         model.add(Flatten())
         model.add(Dense(512, activation='relu'))
@@ -229,10 +280,7 @@ class DQNAgent:
             # self.model.train_on_batch(state, target_f)
             self.model.fit(state, target_f[np.newaxis, ...], epochs=1, verbose=0)
 
-def action_equal(userNumber, totalCPU):
-    actionAarry = [int(np.floor(totalCPU / userNumber)) for i in range(userNumber)]
-    actionAarry[0] += (totalCPU - np.sum(actionAarry))
-    return actionAarry
+
 
 def action_AllForOne(userNumber, totalCPU, userIndex):
     actionAarry = []
@@ -267,8 +315,8 @@ def actionTransfer(userNumber, totalCPU, actionIndex):
                 index += 1
 
 if __name__ == "__main__":
-    userNumber = 2
-    totalCPU = 7
+    userNumber = 3
+    totalCPU = 4
     W = 4
 
     batch_size = 32
@@ -277,7 +325,7 @@ if __name__ == "__main__":
 
     networkModel = 1    # 1: normal 2: convolution
     agent = DQNAgent(userNumber, totalCPU, W, networkModel)
-    channelModel = 1    # 1: discrete 2: correlation
+    channelModel = 2   # 1: discrete 2: correlation
     env = Environment(userNumber, totalCPU, channelModel)
 
 
@@ -306,11 +354,11 @@ if __name__ == "__main__":
                 reward_best, actionBest = env.step_bestAllocate()
                 reward_best_record.append(reward_best)
                 reward_equal_record.append(reward_equal)
-                print(time)
-                print(x_t)
-                print(actionBest)
-                print(actionEqual)
-                if time > 20:
+                # print(time)
+                # print(x_t)
+                # print(actionBest)
+                # print(actionEqual)
+                if time > 1000:
                     break
             else:
                 actionIndex = agent.act(state)
@@ -335,6 +383,14 @@ if __name__ == "__main__":
         time_record.append(time)
         # if episode % 10 == 0:
         #     agent.save("./save/MEC-dqn.h5")
+    bestSuccRate = 'best success rate: ' + repr(env.successTaskCount_best / env.taskCount) + ', success number:' + repr(env.successTaskCount_best)
+    equalSuccRate = 'equal success rate: ' + repr(env.successTaskCount_equal / env.taskCount) + ', success number:' + repr(env.successTaskCount_equal)
+    delayRate = 'delay rate: ' + repr(env.delayTaskCount_best / env.taskCount) + ', delay number:' + repr(env.delayTaskCount_best)
+    totalTaskNumber = 'total number:' + repr(env.taskCount)
+    print(bestSuccRate)
+    print(equalSuccRate)
+    print(delayRate)
+    print(totalTaskNumber)
     plt.figure()
     plt.plot(reward_equal_record, label='equal', marker='+')
     plt.plot(reward_best_record, label='best', marker='.')

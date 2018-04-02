@@ -1,21 +1,28 @@
 import random
-import scipy.special
+# import scipy.special
 import numpy as np
-import os
+# import os
 from collections import deque
 from keras.models import Sequential
 from keras.layers import Dense, InputLayer, Flatten, Conv2D
 from keras.optimizers import Adam
 from matplotlib import pylab as plt
 
+class task:
+    def __init__(self, taskSize, receivingTime):
+        self.taskSize = taskSize
+        self.waitTime = 0
+        self.receivingTime = receivingTime
 
 class Environment:
     def __init__(self, userNumber, totalCPU, channelModel):
         self.userNumber = userNumber
         self.totalCPU = totalCPU
         self.userBuffer = []
+        self.sendBuffer = []
         for i in range(userNumber):
             self.userBuffer.append([])
+            self.sendBuffer.append([])
         self.SNR = []
         self.channel_h = []
         self.beta = 0.5
@@ -31,6 +38,7 @@ class Environment:
         self.punishment_done = -1000
         self.punishment_delay = -1000
         self.channelModel = channelModel
+        self.slot = 100
         if userNumber == 2:
             self.action_size = totalCPU + 1
         if userNumber == 3:
@@ -38,8 +46,10 @@ class Environment:
 
     def reset(self):
         self.userBuffer = []
+        self.sendBuffer = []
         for i in range(self.userNumber):
             self.userBuffer.append([])
+            self.sendBuffer.append([])
         self.channel_h = [0 for i in range(self.userNumber)]
         self.SNR = np.zeros(self.userNumber)
 
@@ -65,7 +75,7 @@ class Environment:
             if not self.SNR[i]:
                 self.channel_h[i] = h_bar
             else:
-                self.channel_h[i] = self.rho*self.channel_h[i]+(1-self.rho)*h_bar
+                self.channel_h[i] = self.rho*self.channel_h[i]+np.sqrt(1-self.rho**2)*h_bar
             self.SNR[i] = abs(self.channel_h[i])**2
 
     def getState(self):
@@ -73,7 +83,8 @@ class Environment:
         for i in range(self.userNumber):
             State[i,0] = self.userBuffer[i][0]['taskSize']
             State[i,1] = self.userBuffer[i][0]['waitTime']
-            State[i,2] = self.SNR[i]
+            State[i,2] = len(self.userBuffer[i])
+            State[i,3] = self.SNR[i]
         return State
 
     def takeAction(self, action):
@@ -124,33 +135,41 @@ class Environment:
         reward = self.takeAction(action)
         return reward, action
 
-    def step_network(self, action):
-        reward = 0
-        done = False
+    def updateWaitTime(self):
         for i in range(self.userNumber):
-            if action[i] == 0:
+
+    def step_network(self, action):
+        reward = 0.1
+        self.updateWaitTime()
+
+        done = False
+        computedSize = self.f0 * self.slot * self.Ts
+        self.userBuffer[action][0].residualSize -= computedSize
+        if self.userBuffer[action][0].residualSize <= 0:
+            self.sendBuffer[action].append(self.userBuffer[action][0])
+            self.userBuffer[action].pop(0)
+
+        for i in range(self.userNumber):
+            Dm = self.userBuffer[i][0]['taskSize']
+            cpu = action[i]
+            mc = int(np.ceil(Dm * self.L / (cpu * self.f0 * self.Ts)))
+            m_MT = self.T_f - self.m_UM - mc
+            self.userBuffer[i].pop(0)
+            if m_MT <= 0:
+                reward = reward + self.punishment_delay # punishment for long delay of calculation
                 continue
             else:
-                Dm = self.userBuffer[i][0]['taskSize']
-                cpu = action[i]
-                mc = int(np.ceil(Dm * self.L / (cpu * self.f0 * self.Ts)))
-                m_MT = self.T_f - self.m_UM - mc
-                self.userBuffer[i].pop(0)
-                if m_MT <= 0:
-                    reward = reward + self.punishment_delay # punishment for long delay of calculation
-                    continue
-                else:
-                    # Qfunction = lambda x: 0.5 - 0.5 * scipy.special.erf(x / np.sqrt(2))
-                    gamma = self.SNR[i] * self.SNR_average
-                    QfunctionInput = (np.log2(1+gamma) - (self.beta*Dm/m_MT)) / (np.log2(np.e)*np.sqrt((1-(1+gamma)**(-2))/m_MT))
-                    reward = reward + QfunctionInput
-                    # decodeError = Qfunction(QfunctionInput)
-                    # if decodeError == 1:
-                    #     reward = reward - 10
-                    # elif decodeError == 0:
-                    #     reward = reward + 10
-                    # else:
-                    #     reward = reward + np.log10(1 / decodeError)
+                # Qfunction = lambda x: 0.5 - 0.5 * scipy.special.erf(x / np.sqrt(2))
+                gamma = self.SNR[i] * self.SNR_average
+                QfunctionInput = (np.log2(1+gamma) - (self.beta*Dm/m_MT)) / (np.log2(np.e)*np.sqrt((1-(1+gamma)**(-2))/m_MT))
+                reward = reward + QfunctionInput
+                # decodeError = Qfunction(QfunctionInput)
+                # if decodeError == 1:
+                #     reward = reward - 10
+                # elif decodeError == 0:
+                #     reward = reward + 10
+                # else:
+                #     reward = reward + np.log10(1 / decodeError)
         self.updateBuffer()
         newState = self.getState()
         #   reward = reward / self.userNumber
@@ -229,42 +248,42 @@ class DQNAgent:
             # self.model.train_on_batch(state, target_f)
             self.model.fit(state, target_f[np.newaxis, ...], epochs=1, verbose=0)
 
-def action_equal(userNumber, totalCPU):
-    actionAarry = [int(np.floor(totalCPU / userNumber)) for i in range(userNumber)]
-    actionAarry[0] += (totalCPU - np.sum(actionAarry))
-    return actionAarry
+# def action_equal(userNumber, totalCPU):
+#     actionAarry = [int(np.floor(totalCPU / userNumber)) for i in range(userNumber)]
+#     actionAarry[0] += (totalCPU - np.sum(actionAarry))
+#     return actionAarry
 
-def action_AllForOne(userNumber, totalCPU, userIndex):
-    actionAarry = []
-    if userNumber == 2:
-        if userIndex == 0:
-            actionAarry = [totalCPU,0]
-        else:
-            actionAarry = [0,totalCPU]
-    if userNumber == 3:
-        if userIndex == 0:
-            actionAarry = [totalCPU,0,0]
-        elif userIndex == 1:
-            actionAarry = [0,totalCPU,0]
-        else:
-            actionAarry = [0,0,totalCPU]
-    return actionAarry
+# def action_AllForOne(userNumber, totalCPU, userIndex):
+#     actionAarry = []
+#     if userNumber == 2:
+#         if userIndex == 0:
+#             actionAarry = [totalCPU,0]
+#         else:
+#             actionAarry = [0,totalCPU]
+#     if userNumber == 3:
+#         if userIndex == 0:
+#             actionAarry = [totalCPU,0,0]
+#         elif userIndex == 1:
+#             actionAarry = [0,totalCPU,0]
+#         else:
+#             actionAarry = [0,0,totalCPU]
+#     return actionAarry
 
-def actionTransfer(userNumber, totalCPU, actionIndex):
-    if userNumber == 2:
-        for i in range(totalCPU+1):
-            if i == actionIndex:
-                actionArray = [i,totalCPU-i]
-                return actionArray
-
-    if userNumber == 3:
-        index = 0
-        for i in range(totalCPU+1):
-            for j in range(totalCPU+1-i):
-                if index == actionIndex:
-                    actionArray = [i,j,totalCPU-i-j]
-                    return actionArray
-                index += 1
+# def actionTransfer(userNumber, totalCPU, actionIndex):
+#     if userNumber == 2:
+#         for i in range(totalCPU+1):
+#             if i == actionIndex:
+#                 actionArray = [i,totalCPU-i]
+#                 return actionArray
+#
+#     if userNumber == 3:
+#         index = 0
+#         for i in range(totalCPU+1):
+#             for j in range(totalCPU+1-i):
+#                 if index == actionIndex:
+#                     actionArray = [i,j,totalCPU-i-j]
+#                     return actionArray
+#                 index += 1
 
 if __name__ == "__main__":
     userNumber = 2
@@ -314,10 +333,10 @@ if __name__ == "__main__":
                     break
             else:
                 actionIndex = agent.act(state)
-                actionAarry = actionTransfer(userNumber, totalCPU, actionIndex)
-                reward_equal = env.equalAllocate()
-                reward_equal_record.append(reward_equal)
-                x_t1, reward, done = env.step_network(actionAarry)
+
+
+
+                x_t1, reward, done = env.step_network(actionIndex)
                 x_t1 = x_t1.reshape(1, x_t1.shape[0], x_t1.shape[1], 1)
                 next_state = np.append(x_t1, state[:, :, :, :W - 1], axis=3)
                 reward_record.append(reward)
