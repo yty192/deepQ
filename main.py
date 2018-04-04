@@ -2,7 +2,7 @@ import random
 import scipy.special
 import numpy as np
 from collections import deque
-from keras.models import Sequential
+from keras.models import Sequential, load_model
 from keras.layers import Dense, InputLayer, Flatten, Conv2D
 from keras.optimizers import Adam
 from matplotlib import pylab as plt
@@ -27,7 +27,7 @@ class Environment:
         self.L = 2640   # required calculation cycle per bit
         self.SNR_average = 10**(2)
         self.rho = 0.7
-        self.punishment_delay = -userNumber
+        self.punishment_delay = -userNumber - 1
         self.channelModel = channelModel
         self.featureNumber = 4
         if userNumber == 2:
@@ -40,6 +40,8 @@ class Environment:
         self.taskCount = 0
         self.successTaskCount_best = 0
         self.successTaskCount_equal = 0
+        self.successTaskCount_random = 0
+        self.delayTaskCount_random = 0
         self.delayTaskCount_best = 0
         self.successTaskCount_network = 0
         self.delayTaskCount_network = 0
@@ -53,9 +55,12 @@ class Environment:
         self.taskCount = 0
         self.successTaskCount_best = 0
         self.successTaskCount_equal = 0
+        self.successTaskCount_random = 0
         self.delayTaskCount_best = 0
         self.successTaskCount_network = 0
         self.delayTaskCount_network = 0
+        self.delayTaskCount_random = 0
+
 
     def updateBuffer(self):
         z = [0.170279632305101, 0.903701776799380, 2.251086629866130, 4.266700170287658, 7.045905402393464,
@@ -120,15 +125,46 @@ class Environment:
                     decodeError = Qfunction(QfunctionInput)
                     if decodeError < self.requiredErrorProbability:
                         successCount += 1
-                        reward = reward + 1
+                        reward += 1
                     else:
-                        reward = reward - 1
+                        reward -= 1
         return reward, successCount
 
     def action_equal(self):
         actionAarry = [int(np.floor(self.totalCPU / self.userNumber)) for i in range(self.userNumber)]
         actionAarry[np.argmin(self.SNR)] += (totalCPU - np.sum(actionAarry))
         return actionAarry
+
+    def step_equal(self):
+        action = self.action_equal()
+        reward, count = self.takeAction(action)
+        self.successTaskCount_equal += count
+
+        for i in range(self.userNumber):
+            if (action != 0) and (self.userBuffer[i]):
+                self.userBuffer[i].pop(0)
+
+        self.updateBuffer()
+
+    def step_random(self):
+        actionIndex = random.randrange(self.action_size)
+        actionAarry = actionTransfer(self.userNumber, self.totalCPU, actionIndex)
+        reward_random, success_random = self.takeAction(actionAarry)
+        self.successTaskCount_random += success_random
+
+        for i in range(self.userNumber):
+            if (actionAarry[i] != 0) and (self.userBuffer[i]):
+                self.userBuffer[i].pop(0)
+
+        self.updateBuffer()
+        done, countDelay = self.checkDelayViolation()
+        if done:
+            self.delayTaskCount_random += countDelay
+            reward_random = self.punishment_delay
+
+        # newState = self.getState()
+
+        # return newState, reward_random, done
 
     def step_bestAllocate(self):
         reward_best = -10000
@@ -214,18 +250,22 @@ class DQNAgent:
         self.learning_rate = 0.001
         self.loss = 0
         self.loss_record = []
+        self.exploration = True
         if networkModel == 1:
             self.model = self._build_FNN_model()
         if networkModel == 2:
             self.model = self._build_Con_model()
+        if networkModel == 3:
+            self.model = load_model(filepath="model/dqn2.h5")
+            self.exploration = False
 
     def _build_FNN_model(self):
         # FNN Neural Net for Deep-Q learning Model
         model = Sequential()
         model.add(InputLayer(input_shape=(self.userNumber, self.featureNumber, self.historyNumber)))
         model.add(Flatten())
-        model.add(Dense(512, activation='relu'))
-        model.add(Dense(256, activation='relu'))
+        model.add(Dense(128, activation='relu'))
+        model.add(Dense(128, activation='relu'))
         model.add(Dense(128, activation='relu'))
         model.add(Dense(self.action_size, activation='linear'))
         model.compile(loss='mse', optimizer=Adam(lr=self.learning_rate))
@@ -246,7 +286,7 @@ class DQNAgent:
         self.memory.append((state, action, reward, next_state, done))
 
     def act(self, state):
-        if np.random.rand() <= self.epsilon:
+        if (np.random.rand() <= self.epsilon) and self.exploration:
             actionIndex = random.randrange(self.action_size)
         else:
             #   state = state.reshape((1, state.shape[0], state.shape[1]))
@@ -262,23 +302,23 @@ class DQNAgent:
         targets = np.zeros((batch_size, self.action_size))
         index = -1
         for state, action, reward, next_state, done in minibatch:
-            # target = reward
-            # if not done:
-            #     target = reward + self.gamma * np.max(self.model.predict(next_state)[0])
-            # self.model.fit(state, target_f[np.newaxis, ...], epochs=1, verbose=0)
+            # target_f = self.model.predict(state)
+            # target_f[0][action] = reward + self.gamma * np.max(self.model.predict(next_state)[0])
+            # self.model.fit(state, target_f, epochs=1, verbose=0)
             index += 1
             inputs[index: index+1] = state
             targets[index] = self.model.predict(state)[0]
             targets[index, action] = reward + self.gamma * np.max(self.model.predict(next_state)[0])
+        # self.model.fit(inputs, targets, epochs=1, verbose=0)
         self.loss = self.model.train_on_batch(inputs, targets)
         self.loss_record.append(self.loss)
 
-    # def load(self, name):
-    #     self.model.load_weights(name)
+    # def load(self):
+    #     self.model = load_model(filepath="model/dqn_episode10_epsilon01.h5")
 
     def save(self):
         # self.model.save_weights(name)
-        self.model.save(filepath="model/dqn_episode10_epsilon01.h5")
+        self.model.save(filepath="model/dqn2.h5")
 
 
 def action_AllForOne(userNumber, totalCPU, userIndex):
@@ -314,17 +354,17 @@ def actionTransfer(userNumber, totalCPU, actionIndex):
                 index += 1
 
 if __name__ == "__main__":
-    userNumber = 3
-    totalCPU = 4
-    W = 4
+    userNumber = 2
+    totalCPU = 3
+    W = 3
 
-    batch_size = 64
-    EPISODES = 500
+    batch_size = 32
+    EPISODES = 10
     done = False
 
-    networkModel = 1    # 1: normal 2: convolution
+    networkModel = 3    # 1: normal 2: convolution 3: load trained model
     agent = DQNAgent(userNumber, totalCPU, W, networkModel)
-    channelModel = 2   # 1: discrete 2: correlation
+    channelModel = 1   # 1: discrete 2: correlation
     env = Environment(userNumber, totalCPU, channelModel)
 
     reward_record = []
@@ -335,8 +375,9 @@ if __name__ == "__main__":
 
     network_episode_success_rate_record = []
     network_episode_delay_rate_record = []
+    equal_episode_success_rate_record = []
 
-    bestActionModel = False
+    actionModel = 1     # 1: network, 2: best, 3: random, 4: equal
 
     for episode in range(EPISODES):
         env.reset()
@@ -350,8 +391,8 @@ if __name__ == "__main__":
         network_episode_delay = 0
         episode_total_task = 0
         for time in range(500):
-            if bestActionModel:
-                x_t = env.getState()
+            if actionModel == 2:
+                # x_t = env.getState()
                 reward_equal, actionEqual = env.equalAllocate()
                 reward_best, actionBest = env.step_bestAllocate()
                 reward_best_record.append(reward_best)
@@ -360,23 +401,31 @@ if __name__ == "__main__":
                 # print(x_t)
                 # print(actionBest)
                 # print(actionEqual)
-            else:
+            elif actionModel == 1:
                 actionIndex = agent.act(state)
                 actionAarry = actionTransfer(userNumber, totalCPU, actionIndex)
-                reward_equal = env.equalAllocate()
+                reward_equal, actionEqual = env.equalAllocate()
                 reward_equal_record.append(reward_equal)
                 x_t1, reward, done = env.step_network(actionAarry)
                 x_t1 = x_t1.reshape(1, x_t1.shape[0], x_t1.shape[1], 1)
                 next_state = np.append(x_t1, state[:, :, :, :W - 1], axis=3)
                 reward_record.append(reward)
+                # print(actionAarry,reward, actionEqual,reward_equal)
                 agent.remember(state, actionIndex, reward, next_state, done)
                 state = next_state
-                if len(agent.memory) > (batch_size):
+                if (len(agent.memory) > batch_size) and agent.exploration:
                     agent.replay(batch_size)
                 # if time % 50 == 0:
                 #     print(agent.loss)
+            elif actionModel == 3:
+                reward_equal, actionEqual = env.equalAllocate()
+                env.step_random()
+                # reward_best_record.append(reward_best)
+                # reward_equal_record.append(reward_equal)
+            else:
+                env.step_equal()
 
-        if bestActionModel:
+        if actionModel == 2:
             bestSuccRate = 'best success rate: ' + repr(env.successTaskCount_best / env.taskCount) + ', success number:' + repr(env.successTaskCount_best)
             equalSuccRate = 'equal success rate: ' + repr(env.successTaskCount_equal / env.taskCount) + ', success number:' + repr(env.successTaskCount_equal)
             bestDelayRate = 'best delay rate: ' + repr(env.delayTaskCount_best / env.taskCount) + ', delay number:' + repr(env.delayTaskCount_best)
@@ -385,11 +434,13 @@ if __name__ == "__main__":
             print(equalSuccRate)
             print(bestDelayRate)
             print(totalTaskNumber)
-        else:
+        elif actionModel == 1:
             network_episode_success = env.successTaskCount_network - network_episode_success
             network_episode_delay = env.delayTaskCount_network - network_episode_delay
             episode_total_task = env.taskCount - episode_total_task
 
+            equal_episode_success_rate = env.successTaskCount_equal / env.taskCount
+            equal_episode_success_rate_record.append(equal_episode_success_rate)
             network_episode_success_rate = network_episode_success / episode_total_task
             network_episode_delay_rate = network_episode_delay / episode_total_task
             network_episode_delay_rate_record.append(network_episode_delay_rate)
@@ -401,7 +452,7 @@ if __name__ == "__main__":
 
             networkSuccRate = 'network success rate: ' + repr(env.successTaskCount_network / env.taskCount) + ', success number: ' + repr(env.successTaskCount_network) + ', total number: ' + repr(env.taskCount)
             networkSuccRate_episode = 'episode network success rate: ' + repr(network_episode_success_rate) + ', success number: ' + repr(network_episode_success) + ', episode total number: ' + repr(episode_total_task)
-            equalSuccRate = 'equal success rate: ' + repr(env.successTaskCount_equal / env.taskCount) + ', success number: ' + repr(env.successTaskCount_equal) + ', total number: ' + repr(env.taskCount)
+            equalSuccRate = 'equal success rate: ' + repr(equal_episode_success_rate) + ', success number: ' + repr(env.successTaskCount_equal) + ', total number: ' + repr(env.taskCount)
             networkDelayRate = 'network delay rate: ' + repr(env.delayTaskCount_network / env.taskCount) + ', delay number: ' + repr(env.delayTaskCount_network) + ', total number: ' + repr(env.taskCount)
             networkDelayRate_episode = 'episode network delay rate: ' + repr(network_episode_delay_rate) + ', delay number: ' + repr(network_episode_delay) + ', episode total number: ' + repr(episode_total_task)
 
@@ -412,7 +463,23 @@ if __name__ == "__main__":
             print(networkDelayRate)
             # print(networkDelayRate_episode)
 
-    if bestActionModel:
+        elif actionModel == 3:
+            randomSuccRate = 'random success rate: ' + repr(env.successTaskCount_random / env.taskCount) + ', success number:' + repr(env.successTaskCount_random)
+            equalSuccRate = 'equal success rate: ' + repr(env.successTaskCount_equal / env.taskCount) + ', success number:' + repr(env.successTaskCount_equal)
+            randomDelayRate = 'random delay rate: ' + repr(env.delayTaskCount_random / env.taskCount) + ', delay number:' + repr(env.delayTaskCount_random)
+            totalTaskNumber = 'total number:' + repr(env.taskCount)
+            print(randomSuccRate)
+            print(equalSuccRate)
+            print(randomDelayRate)
+            print(totalTaskNumber)
+
+        else:
+            equalSuccRate = 'equal success rate: ' + repr(env.successTaskCount_equal / env.taskCount) + ', success number:' + repr(env.successTaskCount_equal)
+            totalTaskNumber = 'total number:' + repr(env.taskCount)
+            print(equalSuccRate)
+            print(totalTaskNumber)
+
+    if actionModel == 2:
         plt.figure()
         plt.plot(reward_equal_record, label='equal', marker='+')
         plt.plot(reward_best_record, label='best', marker='.')
@@ -420,12 +487,13 @@ if __name__ == "__main__":
         plt.grid(True)
         plt.show()
         plt.close()
-    else:
+    elif actionModel == 1:
         agent.save()
         np.savez('result/', loss=agent.loss_record, network_episode_success_rate_record=network_episode_success_rate_record, network_episode_delay_rate_record=network_episode_delay_rate_record)
         plt.figure()
-        plt.plot(network_episode_success_rate_record, label='success_rate', marker='+')
+        plt.plot(network_episode_success_rate_record, label='network_success_rate', marker='+')
         plt.plot(network_episode_delay_rate_record, label='delay_rate', marker='.')
+        plt.plot(equal_episode_success_rate_record, label='equal_success_rate', marker='*')
         plt.legend()
         plt.grid(True)
         plt.figure()
