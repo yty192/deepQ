@@ -206,11 +206,11 @@ class DQNAgent:
             self.action_size = totalCPU + 1
         if userNumber == 3:
             self.action_size = int(((totalCPU + 1) * (totalCPU + 2)) / 2)
-        self.memory = deque(maxlen=1000)
+        self.memory = deque(maxlen=2000)
         self.gamma = 0.95    # discount rate
         self.epsilon = 1  # exploration rate
-        self.epsilon_min = 0.3
-        self.epsilon_decay = 0.9995
+        self.epsilon_min = 0.1
+        self.epsilon_decay = 0.999
         self.learning_rate = 0.001
         self.loss = 0
         self.loss_record = []
@@ -318,8 +318,8 @@ if __name__ == "__main__":
     totalCPU = 4
     W = 4
 
-    batch_size = 128
-    EPISODES = 10
+    batch_size = 64
+    EPISODES = 500
     done = False
 
     networkModel = 1    # 1: normal 2: convolution
@@ -371,7 +371,7 @@ if __name__ == "__main__":
                 reward_record.append(reward)
                 agent.remember(state, actionIndex, reward, next_state, done)
                 state = next_state
-                if len(agent.memory) > (batch_size+500):
+                if len(agent.memory) > (batch_size):
                     agent.replay(batch_size)
                 # if time % 50 == 0:
                 #     print(agent.loss)
@@ -422,6 +422,7 @@ if __name__ == "__main__":
         plt.close()
     else:
         agent.save()
+        np.savez('result/', loss=agent.loss_record, network_episode_success_rate_record=network_episode_success_rate_record, network_episode_delay_rate_record=network_episode_delay_rate_record)
         plt.figure()
         plt.plot(network_episode_success_rate_record, label='success_rate', marker='+')
         plt.plot(network_episode_delay_rate_record, label='delay_rate', marker='.')
