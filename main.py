@@ -359,10 +359,10 @@ if __name__ == "__main__":
     W = 3
 
     batch_size = 32
-    EPISODES = 10
+    EPISODES = 100
     done = False
 
-    networkModel = 3    # 1: normal 2: convolution 3: load trained model
+    networkModel = 1    # 1: normal 2: convolution 3: load trained model
     agent = DQNAgent(userNumber, totalCPU, W, networkModel)
     channelModel = 1   # 1: discrete 2: correlation
     env = Environment(userNumber, totalCPU, channelModel)
@@ -404,8 +404,8 @@ if __name__ == "__main__":
             elif actionModel == 1:
                 actionIndex = agent.act(state)
                 actionAarry = actionTransfer(userNumber, totalCPU, actionIndex)
-                reward_equal, actionEqual = env.equalAllocate()
-                reward_equal_record.append(reward_equal)
+                # reward_equal, actionEqual = env.equalAllocate()
+                # reward_equal_record.append(reward_equal)
                 x_t1, reward, done = env.step_network(actionAarry)
                 x_t1 = x_t1.reshape(1, x_t1.shape[0], x_t1.shape[1], 1)
                 next_state = np.append(x_t1, state[:, :, :, :W - 1], axis=3)
@@ -493,7 +493,7 @@ if __name__ == "__main__":
         plt.figure()
         plt.plot(network_episode_success_rate_record, label='network_success_rate', marker='+')
         plt.plot(network_episode_delay_rate_record, label='delay_rate', marker='.')
-        plt.plot(equal_episode_success_rate_record, label='equal_success_rate', marker='*')
+        # plt.plot(equal_episode_success_rate_record, label='equal_success_rate', marker='*')
         plt.legend()
         plt.grid(True)
         plt.figure()
