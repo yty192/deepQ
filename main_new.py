@@ -21,20 +21,20 @@ class Environment:
         self.f0 = 3000     # calculation cycle per us
         self.Ts = 4.5  # time of one symbol in us
         self.m_UM = 200
-        self.alpha = 4
+        self.alpha = 3
         self.T_f = 600   # time of one frame in symbols
         self.dr = self.alpha * self.T_f * self.Ts   # delay time limitation in us
         self.L = 2640   # required calculation cycle per bit
         self.SNR_average = 10**(2)
         self.rho = 0.7
-        self.punishment_delay = -userNumber - 1
+        self.punishment_delay = -0.5
         self.channelModel = channelModel
         self.featureNumber = 4
         if userNumber == 2:
             self.action_size = totalCPU + 1
         if userNumber == 3:
             self.action_size = int(((totalCPU + 1) * (totalCPU + 2)) / 2)
-        self.newTaskProbability = 0.9
+        self.newTaskProbability = 0.6
         self.requiredErrorProbability = 10**(-4)
         self.taskSizeSpace = [500, 1000, 1500, 2000]
         self.taskCount = 0
@@ -131,8 +131,13 @@ class Environment:
         return reward, successCount
 
     def action_equal(self):
-        actionAarry = [int(np.floor(self.totalCPU / self.userNumber)) for i in range(self.userNumber)]
-        actionAarry[np.argmin(self.SNR)] += (totalCPU - np.sum(actionAarry))
+        if self.userBuffer[0] and self.userBuffer[1]:
+            actionAarry = [int(np.floor(self.totalCPU / self.userNumber)) for i in range(self.userNumber)]
+            actionAarry[np.argmin(self.SNR)] += (totalCPU - np.sum(actionAarry))
+        elif self.userBuffer[0]:
+            actionAarry = [self.totalCPU,0]
+        else:
+            actionAarry = [0,self.totalCPU]
         return actionAarry
 
     def step_equal(self):
@@ -243,9 +248,9 @@ class DQNAgent:
         if userNumber == 3:
             self.action_size = int(((totalCPU + 1) * (totalCPU + 2)) / 2)
         self.memory = deque(maxlen=2000)
-        self.gamma = 0.5    # discount rate
+        self.gamma = 0.95    # discount rate
         self.epsilon = 1  # exploration rate
-        self.epsilon_min = 0.01
+        self.epsilon_min = 0.1
         self.epsilon_decay = 0.999
         self.learning_rate = 0.001
         self.loss = 0
@@ -377,17 +382,17 @@ def test_for_real_episode_rate(agent, userNumber, totalCPU, channelModel, testSt
 if __name__ == "__main__":
     userNumber = 2
     totalCPU = 3
-    W = 3
+    W = 2
 
     batch_size = 32
     EPISODES = 500
     total_step_number = 100 * EPISODES
-    testStep = 1000
+    testStep = 10000
     done = False
 
     networkModel = 1    # 1: normal 2: convolution 3: load trained model
     agent = DQNAgent(userNumber, totalCPU, W, networkModel)
-    channelModel = 2   # 1: discrete 2: correlation
+    channelModel = 1   # 1: discrete 2: correlation
     env = Environment(userNumber, totalCPU, channelModel)
 
     reward_record = []
@@ -402,7 +407,7 @@ if __name__ == "__main__":
     real_network_episode_success_rate_record = []
     real_network_episode_delay_rate_record = []
 
-    actionModel = 2     # 1: network, 2: best, 3: random, 4: equal
+    actionModel = 1     # 1: network, 2: best, 3: random, 4: equal
 
     env.reset()
     env.updateBuffer()
@@ -419,10 +424,10 @@ if __name__ == "__main__":
 
         if actionModel == 2:
             # x_t = env.getState()
-            reward_equal, actionEqual = env.equalAllocate()
+            # reward_equal, actionEqual = env.equalAllocate()
             reward_best, actionBest = env.step_bestAllocate()
             reward_best_record.append(reward_best)
-            reward_equal_record.append(reward_equal)
+            # reward_equal_record.append(reward_equal)
             # print(time)
             # print(x_t)
             # print(actionBest)
@@ -444,7 +449,7 @@ if __name__ == "__main__":
             # if time % 50 == 0:
             #     print(agent.loss)
         elif actionModel == 3:
-            reward_equal, actionEqual = env.equalAllocate()
+            # reward_equal, actionEqual = env.equalAllocate()
             env.step_random()
             # reward_best_record.append(reward_best)
             # reward_equal_record.append(reward_equal)
@@ -563,13 +568,17 @@ if __name__ == "__main__":
         plt.close()
     elif actionModel == 1:
         agent.save()
-        # np.savez('result/', loss=agent.loss_record, network_episode_success_rate_record=network_episode_success_rate_record, network_episode_delay_rate_record=network_episode_delay_rate_record)
+        np.savez('result/p06w2DiscreteChannel_negative05punishment', loss=agent.loss_record, network_episode_success_rate_record=network_episode_success_rate_record, network_episode_delay_rate_record=network_episode_delay_rate_record,real_network_episode_success_rate_record=real_network_episode_success_rate_record,real_network_episode_delay_rate_record=real_network_episode_delay_rate_record)
         plt.figure()
-        plt.plot(network_episode_success_rate_record, label='network_success_rate', marker='+')
-        plt.plot(network_episode_delay_rate_record, label='delay_rate', marker='.')
-        plt.plot(real_network_episode_success_rate_record, label='real_network_success_rate', marker='*')
-        plt.plot(real_network_episode_delay_rate_record, label='real_delay_rate', marker='^')
+        plt.plot(network_episode_success_rate_record, label='DQN success', marker='+')
+        plt.plot(network_episode_delay_rate_record, label='DQN drop', marker='.')
+        plt.plot(real_network_episode_success_rate_record, label='real DQN success', marker='*')
+        plt.plot(real_network_episode_delay_rate_record, label='real DQN drop', marker='^')
         # plt.plot(equal_episode_success_rate_record, label='equal_success_rate', marker='*')
+        # plt.title('Accuracy related to layer numbers and historical time tags')
+        plt.xlabel('Episode')
+        plt.ylabel('Average task success and drop ratio')
+
         plt.legend()
         plt.grid(True)
         plt.figure()
