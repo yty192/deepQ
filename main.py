@@ -7,6 +7,7 @@ from keras.layers import Dense, InputLayer, Flatten, Conv2D
 from keras.optimizers import Adam
 from matplotlib import pylab as plt
 
+# After every episode reset the environment
 
 class Environment:
     def __init__(self, userNumber, totalCPU, channelModel):

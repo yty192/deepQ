@@ -7,6 +7,8 @@ from keras.layers import Dense, InputLayer, Flatten, Conv2D
 from keras.optimizers import Adam
 from matplotlib import pylab as plt
 
+# No reset of environment
+
 
 class Environment:
     def __init__(self, userNumber, totalCPU, channelModel):
@@ -25,16 +27,16 @@ class Environment:
         self.T_f = 600   # time of one frame in symbols
         self.dr = self.alpha * self.T_f * self.Ts   # delay time limitation in us
         self.L = 2640   # required calculation cycle per bit
-        self.SNR_average = 10**(2)
+        self.SNR_average = 10**(2.5)
         self.rho = 0.7
-        self.punishment_delay = -0.5
+        self.punishment_delay = -1
         self.channelModel = channelModel
         self.featureNumber = 4
         if userNumber == 2:
             self.action_size = totalCPU + 1
         if userNumber == 3:
             self.action_size = int(((totalCPU + 1) * (totalCPU + 2)) / 2)
-        self.newTaskProbability = 0.6
+        self.newTaskProbability = 1
         self.requiredErrorProbability = 10**(-4)
         self.taskSizeSpace = [500, 1000, 1500, 2000]
         self.taskCount = 0
@@ -231,7 +233,7 @@ class Environment:
         done, countDelay = self.checkDelayViolation()
         if done:
             self.delayTaskCount_network += countDelay
-            reward_network = self.punishment_delay
+            reward_network += self.punishment_delay  # punishment is negative, it should be added to the reward!!!!
 
         newState = self.getState()
 
@@ -258,8 +260,10 @@ class DQNAgent:
         self.exploration = True
         if networkModel == 1:
             self.model = self._build_FNN_model()
+            self.model_temp = self.model
         if networkModel == 2:
             self.model = self._build_Con_model()
+            self.model_temp = self.model
         if networkModel == 3:
             self.model = load_model(filepath="model/dqn2.h5")
             self.exploration = False
@@ -313,7 +317,7 @@ class DQNAgent:
             index += 1
             inputs[index: index+1] = state
             targets[index] = self.model.predict(state)[0]
-            targets[index, action] = reward + self.gamma * np.max(self.model.predict(next_state)[0])
+            targets[index, action] = reward + self.gamma * np.max(self.model_temp.predict(next_state)[0])
         # self.model.fit(inputs, targets, epochs=1, verbose=0)
         self.loss = self.model.train_on_batch(inputs, targets)
         self.loss_record.append(self.loss)
@@ -382,17 +386,25 @@ def test_for_real_episode_rate(agent, userNumber, totalCPU, channelModel, testSt
 if __name__ == "__main__":
     userNumber = 2
     totalCPU = 3
-    W = 2
+    W = 3
+
+    actionModel = 1  # 1: network, 2: best, 3: random, 4: equal
+
+    if actionModel != 1:
+        EPISODES = 10000
+        total_step_number = 2 * EPISODES
+    else:
+        EPISODES = 500
+        total_step_number = 100 * EPISODES
 
     batch_size = 32
-    EPISODES = 500
-    total_step_number = 100 * EPISODES
     testStep = 10000
+    update_model_temp = 200
     done = False
 
     networkModel = 1    # 1: normal 2: convolution 3: load trained model
     agent = DQNAgent(userNumber, totalCPU, W, networkModel)
-    channelModel = 1   # 1: discrete 2: correlation
+    channelModel = 2   # 1: discrete 2: correlation
     env = Environment(userNumber, totalCPU, channelModel)
 
     reward_record = []
@@ -407,7 +419,6 @@ if __name__ == "__main__":
     real_network_episode_success_rate_record = []
     real_network_episode_delay_rate_record = []
 
-    actionModel = 1     # 1: network, 2: best, 3: random, 4: equal
 
     env.reset()
     env.updateBuffer()
@@ -444,6 +455,8 @@ if __name__ == "__main__":
             # print(actionAarry,reward, actionEqual,reward_equal)
             agent.remember(state, actionIndex, reward, next_state, done)
             state = next_state
+            if ((time % update_model_temp) == 0):
+                agent.model_temp = agent.model
             if (len(agent.memory) > batch_size) and agent.exploration:
                 agent.replay(batch_size)
             # if time % 50 == 0:
@@ -568,7 +581,7 @@ if __name__ == "__main__":
         plt.close()
     elif actionModel == 1:
         agent.save()
-        np.savez('result/p06w2DiscreteChannel_negative05punishment', loss=agent.loss_record, network_episode_success_rate_record=network_episode_success_rate_record, network_episode_delay_rate_record=network_episode_delay_rate_record,real_network_episode_success_rate_record=real_network_episode_success_rate_record,real_network_episode_delay_rate_record=real_network_episode_delay_rate_record)
+        # np.savez('result/p06w2DiscreteChannel_negative05punishment', loss=agent.loss_record, network_episode_success_rate_record=network_episode_success_rate_record, network_episode_delay_rate_record=network_episode_delay_rate_record,real_network_episode_success_rate_record=real_network_episode_success_rate_record,real_network_episode_delay_rate_record=real_network_episode_delay_rate_record)
         plt.figure()
         plt.plot(network_episode_success_rate_record, label='DQN success', marker='+')
         plt.plot(network_episode_delay_rate_record, label='DQN drop', marker='.')
