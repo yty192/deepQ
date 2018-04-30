@@ -2,12 +2,14 @@ import numpy as np
 import matplotlib
 from matplotlib import pylab as plt
 
-load_data = np.load('result/p10w3.npz')
+load_data = np.load('result/3db_p10w3_negative1punishment.npz')
 
 network_episode_success_rate_record = load_data['network_episode_success_rate_record']
 network_episode_delay_rate_record = load_data['network_episode_delay_rate_record']
 real_network_episode_success_rate_record = load_data['real_network_episode_success_rate_record']
 real_network_episode_delay_rate_record = load_data['real_network_episode_delay_rate_record']
+
+print(np.max(real_network_episode_success_rate_record))
 
 randomSucc=0.754*np.ones(100)
 randomDrop=0.044*np.ones(100)

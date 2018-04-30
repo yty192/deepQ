@@ -11,7 +11,7 @@ from matplotlib import pylab as plt
 
 
 class Environment:
-    def __init__(self, userNumber, totalCPU, channelModel):
+    def __init__(self, userNumber, totalCPU, channelModel,probability):
         self.userNumber = userNumber
         self.totalCPU = totalCPU
         self.userBuffer = []
@@ -27,7 +27,7 @@ class Environment:
         self.T_f = 600   # time of one frame in symbols
         self.dr = self.alpha * self.T_f * self.Ts   # delay time limitation in us
         self.L = 2640   # required calculation cycle per bit
-        self.SNR_average = 10**(2.5)
+        self.SNR_average = 10**(3)
         self.rho = 0.7
         self.punishment_delay = -1
         self.channelModel = channelModel
@@ -36,7 +36,7 @@ class Environment:
             self.action_size = totalCPU + 1
         if userNumber == 3:
             self.action_size = int(((totalCPU + 1) * (totalCPU + 2)) / 2)
-        self.newTaskProbability = 1
+        self.newTaskProbability = probability
         self.requiredErrorProbability = 10**(-4)
         self.taskSizeSpace = [500, 1000, 1500, 2000]
         self.taskCount = 0
@@ -362,8 +362,8 @@ def actionTransfer(userNumber, totalCPU, actionIndex):
                     return actionArray
                 index += 1
 
-def test_for_real_episode_rate(agent, userNumber, totalCPU, channelModel, testStep):
-    testEnv = Environment(userNumber, totalCPU, channelModel)
+def test_for_real_episode_rate(agent, userNumber, totalCPU, channelModel, testStep, probability):
+    testEnv = Environment(userNumber, totalCPU, channelModel, probability)
     testEnv.reset()
     testEnv.updateBuffer()
     x_t = testEnv.getState()
@@ -388,24 +388,26 @@ if __name__ == "__main__":
     totalCPU = 3
     W = 3
 
-    actionModel = 1  # 1: network, 2: best, 3: random, 4: equal
+    taskProbabilityList = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
+    taskProbability = 0.1
+    actionModel = 1 # 1: network, 2: best, 3: random, 4: equal
 
     if actionModel != 1:
-        EPISODES = 10000
+        EPISODES = 100000
         total_step_number = 2 * EPISODES
     else:
         EPISODES = 500
         total_step_number = 100 * EPISODES
 
     batch_size = 32
-    testStep = 10000
-    update_model_temp = 200
+    testStep = 100000
+    update_model_temp = 1
     done = False
 
     networkModel = 1    # 1: normal 2: convolution 3: load trained model
     agent = DQNAgent(userNumber, totalCPU, W, networkModel)
     channelModel = 2   # 1: discrete 2: correlation
-    env = Environment(userNumber, totalCPU, channelModel)
+    env = Environment(userNumber, totalCPU, channelModel, taskProbability)
 
     reward_record = []
     reward_equal_record = []
@@ -479,6 +481,7 @@ if __name__ == "__main__":
                 bestDelayRate = 'best delay rate: ' + repr(
                     env.delayTaskCount_best / env.taskCount) + ', delay number:' + repr(env.delayTaskCount_best)
                 totalTaskNumber = 'total number:' + repr(env.taskCount)
+                print ('best with taskProbability' + repr(taskProbability))
                 print(bestSuccRate)
                 print(equalSuccRate)
                 print(bestDelayRate)
@@ -502,7 +505,7 @@ if __name__ == "__main__":
                 agent.exploration = False
                 real_episode_success_rate, real_episode_delay_rate = test_for_real_episode_rate(agent, userNumber,
                                                                                                 totalCPU, channelModel,
-                                                                                                testStep)
+                                                                                                testStep, taskProbability)
                 agent.exploration = True
 
                 real_network_episode_success_rate_record.append(real_episode_success_rate)
@@ -553,12 +556,14 @@ if __name__ == "__main__":
                 randomDelayRate = 'random delay rate: ' + repr(
                     env.delayTaskCount_random / env.taskCount) + ', delay number:' + repr(env.delayTaskCount_random)
                 totalTaskNumber = 'total number:' + repr(env.taskCount)
+                print ('random with taskProbability'+repr(taskProbability))
                 print(randomSuccRate)
                 print(equalSuccRate)
                 print(randomDelayRate)
                 print(totalTaskNumber)
 
             else:
+                print ('equal with taskProbability' + repr(taskProbability))
                 equalSuccRate = 'equal success rate: ' + repr(
                     env.successTaskCount_equal / env.taskCount) + ', success number:' + repr(env.successTaskCount_equal)
                 totalTaskNumber = 'total number:' + repr(env.taskCount)
@@ -581,7 +586,7 @@ if __name__ == "__main__":
         plt.close()
     elif actionModel == 1:
         agent.save()
-        # np.savez('result/p06w2DiscreteChannel_negative05punishment', loss=agent.loss_record, network_episode_success_rate_record=network_episode_success_rate_record, network_episode_delay_rate_record=network_episode_delay_rate_record,real_network_episode_success_rate_record=real_network_episode_success_rate_record,real_network_episode_delay_rate_record=real_network_episode_delay_rate_record)
+        np.savez('result/3db_p01w3_negative1punishment_2', loss=agent.loss_record, network_episode_success_rate_record=network_episode_success_rate_record, network_episode_delay_rate_record=network_episode_delay_rate_record,real_network_episode_success_rate_record=real_network_episode_success_rate_record,real_network_episode_delay_rate_record=real_network_episode_delay_rate_record)
         plt.figure()
         plt.plot(network_episode_success_rate_record, label='DQN success', marker='+')
         plt.plot(network_episode_delay_rate_record, label='DQN drop', marker='.')
