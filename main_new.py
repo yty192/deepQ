@@ -389,8 +389,8 @@ if __name__ == "__main__":
     W = 3
 
     taskProbabilityList = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
-    taskProbability = 0.1
-    actionModel = 1 # 1: network, 2: best, 3: random, 4: equal
+    taskProbability = 0.4
+    actionModel = 3 # 1: network, 2: best, 3: random, 4: equal
 
     if actionModel != 1:
         EPISODES = 100000
